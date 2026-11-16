@@ -196,13 +196,12 @@ class ExternalIdTwoPassMixin:
     # Override to False on streams whose get_url_params doesn't know how to fetch
     # integrationStatus=Processing records (see _fetch_processing_only below).
     fetch_processing_status = True
+    fetch_unexported_lookback_days = 30
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if self.config.get("fetch_unexported", False):
-            start_date = self.config.get("start_date")
-            if not start_date or start_date == "2000-01-01T00:00:00Z":
-                raise Exception("Please set start_date param if you want to use fetch_unexported")
+    def get_unexported_since(self) -> str:
+        """modifiedSince for the records-without-externalId pass: now (UTC) - lookback days."""
+        since = pendulum.now("UTC").subtract(days=self.fetch_unexported_lookback_days)
+        return since.strftime("%Y-%m-%dT%H:%M:%S")
 
     def request_records(self, context: Optional[dict]) -> Iterable[dict]:
         seen_ids = set()

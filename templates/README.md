@@ -31,6 +31,10 @@ Custom User-Agent string sent in HTTP requests. If omitted, the header is not se
 Start date or datetime for incremental sync. Records modified on or after this time are synced. Used for `modifiedSince` query parameter.
 - **Example**: `"2024-01-01"` or `"2024-01-01T00:00:00"`
 
+#### `fetch_unexported` (boolean, optional)
+Adds a second pass to `invoices`, `credit_notes`, `purchase_orders` and `suppliers` that fetches records without an `externalId`, modified in the last 30 days (computed at run time, `start_date` is not used and not required).
+- **Default**: `false`
+
 ---
 
 ## Invoices Stream

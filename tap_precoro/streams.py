@@ -28,6 +28,9 @@ PROCESSING_PASS_ALLOWED_STATUSES = {2, 4, 5}
 # credit note from scratch). They're exported via the credit_notes stream, never as invoices.
 CREDIT_NOTE_LOGIC_TYPES = {1, 5}
 
+# externalId markers for "never export" (Precoro's historical, our ETLs' internal)
+NOT_EXPORTED_EXTERNAL_IDS = {"historical", "internal"}
+
 # Credit notes are never left "approved": Precoro marks them paid / partly paid on approval,
 # so these are the statuses to sync when credit_note_statuses isn't set in config.
 DEFAULT_CREDIT_NOTE_STATUSES = "partly_paid,paid"
@@ -135,8 +138,7 @@ class InvoicesStream(ExternalIdTwoPassMixin, TransactionsStream):
         params = super().get_url_params(context, next_page_token)
         # Second pass: fetch records without externalId (sent_to_external=0)
         if getattr(self, "_fetch_no_external_only", False):
-            start_date = self.config.get("start_date")
-            params["modifiedSince"] = start_date
+            params["modifiedSince"] = self.get_unexported_since()
             params["sent_to_external"] = 0
         # Third pass: fetch records currently in Processing integration status,
         # regardless of updateDate (integrationStatus changes don't bump updateDate)
@@ -167,6 +169,10 @@ class InvoicesStream(ExternalIdTwoPassMixin, TransactionsStream):
         # Skip canceled invoices (else the processing-status pass re-fetches them forever)
         if row.get("status") == INVOICE_STATUS_CANCELED:
             self.logger.info(f"Invoice with id {row['id']} skipped because status=8 (canceled)")
+            return None
+
+        if row.get("externalId") in NOT_EXPORTED_EXTERNAL_IDS:
+            self.logger.info(f"Invoice with id {row['id']} skipped because externalId='{row['externalId']}'")
             return None
         # Skip credit notes: /invoices returns them too, but they're synced by the credit_notes
         # stream - letting them through here exports every credit note a second time as a bill
@@ -347,8 +353,7 @@ class PurchaseOrdersStream(ExternalIdTwoPassMixin, TransactionsStream):
         params = super().get_url_params(context, next_page_token)
         # Second pass: fetch records without externalId (sent_to_external=0)
         if getattr(self, "_fetch_no_external_only", False):
-            start_date = self.config.get("start_date")
-            params["modifiedSince"] = start_date
+            params["modifiedSince"] = self.get_unexported_since()
             params["sent_to_external"] = 0
         return params
 
@@ -357,6 +362,15 @@ class PurchaseOrdersStream(ExternalIdTwoPassMixin, TransactionsStream):
         return {
             "purchase_order_id": record["idn"],
         }
+
+    def post_process(self, row, context):
+        row = super().post_process(row, context)
+
+        if row.get("externalId") in NOT_EXPORTED_EXTERNAL_IDS:
+            self.logger.info(f"Purchase order with id {row['id']} skipped because externalId='{row['externalId']}'")
+            return None
+
+        return row
 
 
 class PurchaseOrderDetailsStream(PrecoroStream):
@@ -676,8 +690,7 @@ class SuppliersStream(AccountSetupMixin, ExternalIdTwoPassMixin, PrecoroStream):
 
         # Second pass: suppliers without externalId (externalIntegrated=0); enable=1 already set above
         if getattr(self, "_fetch_no_external_only", False):
-            start_date = self.config.get("start_date")
-            params["modifiedSince"] = start_date
+            params["modifiedSince"] = self.get_unexported_since()
             params["externalIntegrated"] = 0
 
         return params
@@ -815,8 +828,7 @@ class CreditNotesStream(ExternalIdTwoPassMixin, TransactionsStream):
 
         # Second pass: fetch records without externalId (sent_to_external=0)
         if getattr(self, "_fetch_no_external_only", False):
-            start_date = self.config.get("start_date")
-            params["modifiedSince"] = start_date
+            params["modifiedSince"] = self.get_unexported_since()
             params["sent_to_external"] = 0
         # Third pass: fetch records currently in Processing integration status,
         # regardless of updateDate or workflow status[]
@@ -846,6 +858,10 @@ class CreditNotesStream(ExternalIdTwoPassMixin, TransactionsStream):
         # Skip canceled credit notes (else the processing-status pass re-fetches them forever)
         if row.get("status") == INVOICE_STATUS_CANCELED:
             self.logger.info(f"Credit note with id {row['id']} skipped because status=8 (canceled)")
+            return None
+
+        if row.get("externalId") in NOT_EXPORTED_EXTERNAL_IDS:
+            self.logger.info(f"Credit note with id {row['id']} skipped because externalId='{row['externalId']}'")
             return None
 
         if self.export_conditions is None:
