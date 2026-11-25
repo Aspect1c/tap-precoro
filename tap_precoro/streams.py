@@ -807,6 +807,7 @@ class CreditNotesStream(ExternalIdTwoPassMixin, TransactionsStream):
     """Credit notes stream. Same as invoices but with logicType[]=1 and no parentIdn filtering."""
 
     name = "credit_notes"
+    supports_error_retry = True
     path = "/invoices"
     primary_keys = ["id"]
     replication_key = "updateDate"
@@ -836,6 +837,11 @@ class CreditNotesStream(ExternalIdTwoPassMixin, TransactionsStream):
             params.pop("modifiedSince", None)
             params.pop("status[]", None)
             params["integrationStatus[]"] = 7
+        # Fourth pass (one-off): ERROR integration status (4); only ids listed in config
+        # "retry_error_ids" survive post_process
+        if getattr(self, "_fetch_error_retry_only", False):
+            params.pop("modifiedSince", None)
+            params["integrationStatus[]"] = 4
         return params
 
     def get_child_context(self, record: dict, context: Optional[dict]) -> dict:
@@ -846,6 +852,10 @@ class CreditNotesStream(ExternalIdTwoPassMixin, TransactionsStream):
 
     def post_process(self, row, context):
         row = super().post_process(row, context)
+
+        # Error-retry pass: keep only explicitly listed ids, never re-send other ERROR docs
+        if getattr(self, "_fetch_error_retry_only", False) and str(row.get("id")) not in self.get_retry_error_ids():
+            return None
 
         # Skip credit notes waiting on a disabled connector: the hotglue-webhook now
         # handles those once the connector comes back, so the polling job must not re-pull them.

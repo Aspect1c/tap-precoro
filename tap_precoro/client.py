@@ -197,11 +197,17 @@ class ExternalIdTwoPassMixin:
     # integrationStatus=Processing records (see _fetch_processing_only below).
     fetch_processing_status = True
     fetch_unexported_lookback_days = 30
+    # Only streams whose get_url_params handles _fetch_error_retry_only set this to True
+    supports_error_retry = False
 
     def get_unexported_since(self) -> str:
         """modifiedSince for the records-without-externalId pass: now (UTC) - lookback days."""
         since = pendulum.now("UTC").subtract(days=self.fetch_unexported_lookback_days)
         return since.strftime("%Y-%m-%dT%H:%M:%S")
+
+    def get_retry_error_ids(self) -> set:
+        """Precoro ids from config "retry_error_ids" (one-off retry of ERROR-status docs)."""
+        return {str(i) for i in (self.config.get("retry_error_ids") or [])}
 
     def request_records(self, context: Optional[dict]) -> Iterable[dict]:
         seen_ids = set()
@@ -239,3 +245,21 @@ class ExternalIdTwoPassMixin:
             finally:
                 self._fetch_processing_only = False
             self.logger.info(f"{self.name.capitalize()} in Processing status: {pass3_count}")
+
+        # Pass 4 (one-off retry): documents stuck in ERROR integration status (4) that were
+        # explicitly listed in config "retry_error_ids". Never runs when the list is empty.
+        retry_ids = self.get_retry_error_ids() if self.supports_error_retry else set()
+        if retry_ids:
+            self._fetch_error_retry_only = True
+            self.page = 1
+            pass4_count = 0
+            try:
+                for record in super().request_records(context):
+                    if record["id"] in seen_ids:
+                        continue
+                    seen_ids.add(record["id"])
+                    pass4_count += 1
+                    yield record
+            finally:
+                self._fetch_error_retry_only = False
+            self.logger.info(f"{self.name.capitalize()} retried from ERROR status: {pass4_count}")
